@@ -4,6 +4,8 @@ const fs = require('fs').promises;
 const $url_form = "https://loraincountyauditor.com/gis/report/Report.aspx?pin=";
 
 const args = process.argv.slice(2); 
+const $selector_timeout = args.length > 2 ? args[2] : 20000; // default "selector wait" timeout 
+console.log("Selector timeout:", $selector_timeout, 'ms.' );
 const tax_selector = "tbody[data-tableid=\"Taxes0\"]";  
 
 async function scrapeProduct(browser_index, chunk, $headless  )  {	
@@ -14,21 +16,40 @@ async function scrapeProduct(browser_index, chunk, $headless  )  {
 	for (let i=0; i < chunk.length; i++){
 		let start = Date.now();  
 		let page = await browser.newPage();
+		
+		//const navigationPromise = page.waitForNavigation({waitUntil: "domcontentloaded"});
+		
 		// 0 means an unlimited amount of time
 		await page.setDefaultNavigationTimeout(0);
-        		
-		await page.goto($url_form + chunk[i]); 	  
-		
-		await page.waitForSelector(tax_selector);
-	 
+        await page.setDefaultTimeout(0);			  
+		//await page.waitForNavigation({waitUntil: "domcontentloaded"})
+		await page.goto($url_form + chunk[i]); 
+		let $selector_wait;
+        await page.waitForSelector(tax_selector, {timeout: $selector_timeout} )
+		.then(() => {  
+			//console.log("Success with selector."); 	
+			}).catch((err)=> { 
+				console.log("Failure to get tax info HTML element. ERR:", err);
+				failed_pool.push(chunk[i]);
+				if (failed_pool.length >= 10){
+					failed_pool.forEach( function (item) {
+						stream.write(item + "\n");
+					});
+					failed_pool=[];
+				}
+				$selector_wait = 0;								   
+			} ); 
+		//console.log("Selector wait:", $selector_wait);
+		if ($selector_wait===0){
+			continue;
+		}
 		let taxes = await page.$(tax_selector);
-		//console.log("Taxes:" , typeof(taxes) ); 	  
-		
+		//console.log("Taxes:" , typeof(taxes) ); 
 		 
 		await page.$eval( tax_selector, el => el.scrollIntoView());
 	    await page.waitForTimeout(1000);
 		
-		let body = await page.$(tax_selector);		
+		let body = await page.$(tax_selector );		// , {timeout: 2000}
 		
 		// process HTML
 		let tax_property = await body.getProperty('innerHTML');
@@ -47,11 +68,11 @@ async function scrapeProduct(browser_index, chunk, $headless  )  {
 			const tax_json =  '{ "parcel": "' + chunk[i] +'", ' + tax_inner_html.slice(1) + ', "time": "' + (Date.now() - start)/1000 + '" }';
 			//console.log("Tax info:", tax_json); 
 			console.log('Got info of parcel', chunk[i], "; browser: ", browser_index);
-			await fs.writeFile('data2/'+chunk[i]+'.json', tax_json)
-				.then(()=> { console.log("JSON is written"); });
+			await fs.writeFile('data4/'+chunk[i]+'.json', tax_json)
+				.then(()=> { /* console.log("JSON is written"); */ });
 		} else {
 			failed_pool.push(chunk[i]);
-			if (failed_pool.length > 10){
+			if (failed_pool.length >= 10){
 				failed_pool.forEach( function (item) {
 					stream.write(item + "\n");
 				});
@@ -66,7 +87,7 @@ async function scrapeProduct(browser_index, chunk, $headless  )  {
 			console.log('********** Browser ', browser_index, " has processed ", i , " items **********");
 		}
 	}
-	console.log('************** Closing browser ', browser_index, "**************");
+	console.log('************** Closing browser', browser_index, " and saving failed parcels **************");
 	browser.close();
 	console.log(new Date().toISOString());
 	failed_pool.forEach( function (item) {
@@ -75,11 +96,11 @@ async function scrapeProduct(browser_index, chunk, $headless  )  {
 	failed_pool=[];
 }
  
-var parcels = require('fs').readFileSync('parcel-list.txt').toString().split("\r\n");// Sync
+var parcels = require('fs').readFileSync('parcel-list-failed.txt').toString().split("\n"); // Sync
 var parcels_chunk;
 var failed_pool=[];
 
-var stream = require('fs').createWriteStream("data2/failed_parcels.txt", {flags:'a'});
+var stream = require('fs').createWriteStream("data4/failed_parcels.txt", {flags:'a'});
 //  You are not even required to use stream.end(), default option is AutoClose:true, 
 // so your file will end when your process ends and you avoid opening too many files.
 // stream.end();
