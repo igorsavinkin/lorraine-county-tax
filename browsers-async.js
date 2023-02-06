@@ -8,6 +8,8 @@ const $selector_timeout = args.length > 2 ? args[2] : 20000; // default "selecto
 console.log("Selector timeout:", $selector_timeout, 'ms.' );
 const tax_selector_check = "tbody[data-tableid=\"Taxes0\"] > tr[class=\"report-row\"] > td"; 
 const tax_selector = "tbody[data-tableid=\"Taxes0\"]";
+const folder ="data";
+
 
 function dump(failed_pool, force=false){
 	if (force || failed_pool.length >= 10){
@@ -71,18 +73,25 @@ async function scrapeProduct(browser_index, chunk, $headless  )  {
 			tax_inner_html = tax_inner_html.replaceAll('</td>', '"');
 			tax_inner_html = tax_inner_html.replaceAll('&nbsp;','');
 			tax_inner_html = tax_inner_html.replaceAll(':""', '');
-			const tax_json =  '{ "parcel": "' + chunk[i] +'", ' + tax_inner_html.slice(1) + ', "time": "' + (Date.now() - start)/1000 + '" }';
-			//console.log("Tax info:", tax_json); 
-			console.log('Got info of parcel', chunk[i], "; browser: ", browser_index);
-			await fs.writeFile('data/'+chunk[i]+'.json', tax_json)
-				//.then(()=> { /* console.log("JSON is written"); */ });
+			if ( tax_inner_html.includes( '"Gross Full Year Tax","Special') ){
+				failed_pool.push(chunk[i]);
+				dump(failed_pool);
+				console.log('Failure (2) to fetch tax info for parcel', chunk[i], "; browser: ", browser_index);
+			} else {
+				const tax_json =  '{ "parcel": "' + chunk[i] +'", ' + tax_inner_html.slice(1) + ', "time": "' + (Date.now() - start)/1000 + '" }';
+				//console.log("Tax info:", tax_json); 
+				console.log('Got info of parcel', chunk[i], "; browser: ", browser_index);
+				await fs.writeFile(folder + '/' + chunk[i]+'.json', tax_json)
+				      //.then(()=> { /* console.log("JSON is written"); */ });
+			} 			
+				
 		} else {
 			failed_pool.push(chunk[i]);
 			dump(failed_pool);
 			console.log('Failure to fetch tax info for parcel', chunk[i], "; browser: ", browser_index);
 		}  
-		// we close tab with that URL
-		await page.close(); // ohterwise the browser will keep pages/tabs open and RAM will be leaking
+		// we close tab with an URL
+		await page.close(); // ohterwise the browser will keep pages/tabs open and free RAM will be leaking
 		
 		if (i%20==0 && i>0){
 			console.log('********** Browser ', browser_index, " has processed ", i , " items **********");
@@ -91,15 +100,17 @@ async function scrapeProduct(browser_index, chunk, $headless  )  {
 	console.log('************** Closing browser', browser_index, " and saving failed parcels **************");
 	browser.close();
 	console.log(new Date().toISOString());
-	dump(failed_pool, true);
+	// we force to dump the "failed_pool" array since the scrape process is over for that browser.
+	dump(failed_pool, true); 
 }
  
-var parcels = require('fs').readFileSync('parcel-list-failed.txt').toString().split("\r\n"); // Sync
+var parcels = require('fs').readFileSync(folder + '/parcels.txt').toString().split("\r\n"); // Sync
 var parcels_chunk;
 var failed_pool=[];
 
-var stream = require('fs').createWriteStream("parcels.txt", {flags:'a'});
-//  You are not even required to use stream.end(), default option is AutoClose:true, 
+// a stream for failed parcels.
+var stream = require('fs').createWriteStream(folder + "/failed-parcels.txt", {flags:'a'});
+//    We are not even required to use stream.end(), default option is AutoClose:true, 
 // so your file will end when your process ends and you avoid opening too many files.
 // stream.end();
 
