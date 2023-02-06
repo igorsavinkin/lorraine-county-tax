@@ -6,8 +6,18 @@ const $url_form = "https://loraincountyauditor.com/gis/report/Report.aspx?pin=";
 const args = process.argv.slice(2); 
 const $selector_timeout = args.length > 2 ? args[2] : 20000; // default "selector wait" timeout 
 console.log("Selector timeout:", $selector_timeout, 'ms.' );
-const tax_selector = "tbody[data-tableid=\"Taxes0\"]";  
+const tax_selector_check = "tbody[data-tableid=\"Taxes0\"] > tr[class=\"report-row\"] > td"; 
+const tax_selector = "tbody[data-tableid=\"Taxes0\"]";
 
+function dump(failed_pool, force=false){
+	if (force || failed_pool.length >= 10){
+		failed_pool.forEach( function (item) {
+			stream.write(item + "\r\n");
+		});
+		failed_pool=[];
+	}  
+	return;	
+}
 async function scrapeProduct(browser_index, chunk, $headless  )  {	
    
 	let browser = await puppeteer.launch({
@@ -24,30 +34,26 @@ async function scrapeProduct(browser_index, chunk, $headless  )  {
         await page.setDefaultTimeout(0);			  
 		//await page.waitForNavigation({waitUntil: "domcontentloaded"})
 		await page.goto($url_form + chunk[i]); 
+		await page.waitForTimeout(1000);
 		let $selector_wait;
-        await page.waitForSelector(tax_selector, {timeout: $selector_timeout} )
-		.then(() => {  
-			//console.log("Success with selector."); 	
+        await page.waitForSelector(tax_selector_check, {timeout: $selector_timeout} )
+		.then(() => {  	//console.log("Success with selector."); 	
 			}).catch((err)=> { 
-				console.log("Failure to get tax info HTML element. ERR:", err);
+				console.log("Failure to get a tax info HTML element. Parcel: ", chunk[i] ,"\nERR:", err.name.slice(0, 50));
 				failed_pool.push(chunk[i]);
-				if (failed_pool.length >= 10){
-					failed_pool.forEach( function (item) {
-						stream.write(item + "\n");
-					});
-					failed_pool=[];
-				}
+				dump(failed_pool);
 				$selector_wait = 0;								   
 			} ); 
 		//console.log("Selector wait:", $selector_wait);
 		if ($selector_wait===0){
+			//console.log("We skip processing cause of Timeout Error, parcel:", chunk[i]);
 			continue;
 		}
 		let taxes = await page.$(tax_selector);
 		//console.log("Taxes:" , typeof(taxes) ); 
 		 
 		await page.$eval( tax_selector, el => el.scrollIntoView());
-	    await page.waitForTimeout(1000);
+	    
 		
 		let body = await page.$(tax_selector );		// , {timeout: 2000}
 		
@@ -68,39 +74,31 @@ async function scrapeProduct(browser_index, chunk, $headless  )  {
 			const tax_json =  '{ "parcel": "' + chunk[i] +'", ' + tax_inner_html.slice(1) + ', "time": "' + (Date.now() - start)/1000 + '" }';
 			//console.log("Tax info:", tax_json); 
 			console.log('Got info of parcel', chunk[i], "; browser: ", browser_index);
-			await fs.writeFile('data4/'+chunk[i]+'.json', tax_json)
-				.then(()=> { /* console.log("JSON is written"); */ });
+			await fs.writeFile('data/'+chunk[i]+'.json', tax_json)
+				//.then(()=> { /* console.log("JSON is written"); */ });
 		} else {
 			failed_pool.push(chunk[i]);
-			if (failed_pool.length >= 10){
-				failed_pool.forEach( function (item) {
-					stream.write(item + "\n");
-				});
-				failed_pool=[];
-			}
+			dump(failed_pool);
 			console.log('Failure to fetch tax info for parcel', chunk[i], "; browser: ", browser_index);
 		}  
 		// we close tab with that URL
 		await page.close(); // ohterwise the browser will keep pages/tabs open and RAM will be leaking
 		
-		if (i%10==0){
+		if (i%20==0 && i>0){
 			console.log('********** Browser ', browser_index, " has processed ", i , " items **********");
 		}
 	}
 	console.log('************** Closing browser', browser_index, " and saving failed parcels **************");
 	browser.close();
 	console.log(new Date().toISOString());
-	failed_pool.forEach( function (item) {
-		stream.write(item + "\n");
-	});
-	failed_pool=[];
+	dump(failed_pool, true);
 }
  
-var parcels = require('fs').readFileSync('parcel-list-failed.txt').toString().split("\n"); // Sync
+var parcels = require('fs').readFileSync('parcel-list-failed.txt').toString().split("\r\n"); // Sync
 var parcels_chunk;
 var failed_pool=[];
 
-var stream = require('fs').createWriteStream("data4/failed_parcels.txt", {flags:'a'});
+var stream = require('fs').createWriteStream("parcels.txt", {flags:'a'});
 //  You are not even required to use stream.end(), default option is AutoClose:true, 
 // so your file will end when your process ends and you avoid opening too many files.
 // stream.end();
